@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股筛选工具</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f1117; color: #e0e0e0; min-height: 100vh; }
+header { padding: 24px 32px; border-bottom: 1px solid #1e2130; display: flex; align-items: center; justify-content: space-between; }
+h1 { font-size: 20px; font-weight: 600; color: #fff; letter-spacing: 1px; }
+#clock { font-size: 14px; color: #8b9ab0; font-variant-numeric: tabular-nums; }
+.actions { padding: 24px 32px; display: flex; gap: 12px; align-items: center; }
+button { padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; transition: opacity .15s; }
+button:hover { opacity: .85; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+#btn-screen { background: #2563eb; color: #fff; }
+#btn-update { background: #16a34a; color: #fff; }
+#status-msg { font-size: 13px; color: #8b9ab0; margin-left: 8px; }
+#progress-wrap { margin: 0 32px 12px; display: none; }
+#progress-header { display: flex; justify-content: space-between; font-size: 12px; color: #8b9ab0; margin-bottom: 6px; }
+#progress-bar-bg { background: #1a1d27; border-radius: 4px; height: 8px; overflow: hidden; }
+#progress-bar-fill { height: 100%; background: #2563eb; border-radius: 4px; transition: width .3s; width: 0%; }
+#log-box { margin: 0 32px 16px; background: #1a1d27; border: 1px solid #2a2d3e; border-radius: 6px; padding: 12px 16px; max-height: 200px; overflow-y: auto; font-size: 12px; font-family: monospace; color: #a0b0c0; display: none; white-space: pre-wrap; }
+.log-error { color: #f87171; }
+.log-info  { color: #60a5fa; }
+.table-wrap { padding: 0 32px 32px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { background: #1a1d27; color: #8b9ab0; font-weight: 500; padding: 10px 14px; text-align: right; border-bottom: 1px solid #2a2d3e; white-space: nowrap; }
+thead th:first-child, thead th:nth-child(2) { text-align: left; }
+tbody tr { border-bottom: 1px solid #1a1d27; cursor: pointer; transition: background .1s; }
+tbody tr:hover { background: #1e2130; }
+tbody td { padding: 10px 14px; text-align: right; white-space: nowrap; }
+tbody td:first-child, tbody td:nth-child(2) { text-align: left; }
+.code { color: #60a5fa; font-weight: 500; }
+.name { color: #e0e0e0; }
+.gain-pos { color: #ef4444; font-weight: 600; }
+.gain-neg { color: #22c55e; font-weight: 600; }
+.tr-new { background: #1a3a5c; border-left: 3px solid #60a5fa; }
+.tr-new:hover { background: #1e4580; }
+.new-badge { display: inline-block; background: #60a5fa; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; font-weight: 600; vertical-align: middle; }
+.wg-pos { color: #ef4444; font-weight: 500; }
+.wg-neg { color: #22c55e; font-weight: 500; }
+.wg-none { color: #4a5568; }
+#empty-msg { text-align: center; padding: 48px; color: #4a5568; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>A股筛选工具</h1>
+  <span id="clock"></span>
+</header>
+<div class="actions">
+  <button id="btn-screen">显示当前结果</button>
+  <button id="btn-update">更新数据</button>
+  <label style="font-size:13px;color:#8b9ab0;cursor:pointer;user-select:none">
+    <input type="checkbox" id="chk-force-financial" style="margin-right:5px;cursor:pointer">强制刷新财务数据
+  </label>
+  <span id="status-msg"></span>
+</div>
+<div id="progress-wrap">
+  <div id="progress-header">
+    <span id="progress-label">准备中…</span>
+    <span id="progress-count"></span>
+  </div>
+  <div id="progress-bar-bg"><div id="progress-bar-fill"></div></div>
+</div>
+<div id="log-box"></div>
+<div class="table-wrap">
+  <div id="empty-msg">点击「显示当前结果」加载筛选数据</div>
+  <table id="result-table" style="display:none">
+    <thead>
+      <tr>
+        <th>代码</th><th>名称</th><th>上市开盘</th><th>历史最高</th>
+        <th>最高日期</th><th>峰后最低</th><th>当前价格</th><th>涨幅%</th><th>周涨幅%</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+<script>
+// clock
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleDateString('zh-CN') + ' ' + now.toLocaleTimeString('zh-CN');
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// screen
+document.getElementById('btn-screen').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-screen');
+  const msg = document.getElementById('status-msg');
+  btn.disabled = true;
+  msg.textContent = '筛选中，请稍候…';
+  try {
+    const res = await fetch('/api/screen');
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error);
+    renderTable(json.data);
+    msg.textContent = `共 ${json.data.length} 只符合条件`;
+  } catch(e) {
+    msg.textContent = '错误: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function renderTable(data) {
+  const tbody = document.getElementById('tbody');
+  const table = document.getElementById('result-table');
+  const empty = document.getElementById('empty-msg');
+  tbody.innerHTML = '';
+  if (!data.length) {
+    table.style.display = 'none';
+    empty.textContent = '暂无符合条件的股票';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  table.style.display = 'table';
+  data.forEach(r => {
+    const tr = document.createElement('tr');
+    if (r.is_new) tr.classList.add('tr-new');
+    const gainCls = r.gain_pct >= 0 ? 'gain-pos' : 'gain-neg';
+    const nameCell = r.is_new
+      ? `${r.name}<span class="new-badge">新增</span>`
+      : r.name;
+    const wg = r.weekly_gain;
+    let wgHtml = '<span class="wg-none">—</span>';
+    if (wg !== null && wg !== undefined) {
+      const wgCls = wg >= 0 ? 'wg-pos' : 'wg-neg';
+      const sign = wg >= 0 ? '+' : '';
+      wgHtml = `<span class="${wgCls}">${sign}${wg.toFixed(2)}%</span>`;
+    }
+    tr.innerHTML = `
+      <td class="code">${r.code}</td>
+      <td class="name">${nameCell}</td>
+      <td>${r.list_open_price.toFixed(2)}</td>
+      <td>${r.peak_price.toFixed(2)}</td>
+      <td>${r.peak_date}</td>
+      <td>${r.post_peak_min.toFixed(2)}</td>
+      <td>${r.current_price.toFixed(2)}</td>
+      <td class="${gainCls}">${r.gain_pct.toFixed(1)}%</td>
+      <td>${wgHtml}</td>`;
+    tr.addEventListener('click', () => {
+      window.open(`/kline.html?code=${r.code}&name=${encodeURIComponent(r.name)}`, '_blank');
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+// update
+let pollTimer = null;
+document.getElementById('btn-update').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-update');
+  const msg = document.getElementById('status-msg');
+  const logBox = document.getElementById('log-box');
+  const progressWrap = document.getElementById('progress-wrap');
+  btn.disabled = true;
+  logBox.innerHTML = '';
+  logBox.style.display = 'block';
+  progressWrap.style.display = 'block';
+  document.getElementById('progress-bar-fill').style.width = '0%';
+  document.getElementById('progress-label').textContent = '正在启动…';
+  document.getElementById('progress-count').textContent = '';
+  msg.textContent = '';
+  try {
+    await fetch('/api/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'force_financial=' + document.getElementById('chk-force-financial').checked,
+    });
+    pollTimer = setInterval(pollStatus, 1500);
+  } catch(e) {
+    msg.textContent = '启动失败: ' + e.message;
+    btn.disabled = false;
+  }
+});
+
+let _lastLogLen = 0;
+async function pollStatus() {
+  try {
+    const res = await fetch('/api/update/status');
+    const json = await res.json();
+    const logBox = document.getElementById('log-box');
+
+    // append only new lines
+    const newLines = json.log.slice(_lastLogLen);
+    _lastLogLen = json.log.length;
+    newLines.forEach(line => {
+      const span = document.createElement('span');
+      if (line.startsWith('[ERROR]')) {
+        span.className = 'log-error';
+      } else if (line.startsWith('[INFO]')) {
+        span.className = 'log-info';
+      }
+      // hide [PROGRESS] lines from log (they're shown in the bar)
+      if (line.startsWith('[PROGRESS]')) return;
+      span.textContent = line + '\n';
+      logBox.appendChild(span);
+    });
+    logBox.scrollTop = logBox.scrollHeight;
+
+    // update progress bar
+    const p = json.progress;
+    if (p && p.total > 0) {
+      const pct = Math.round(p.current / p.total * 100);
+      document.getElementById('progress-bar-fill').style.width = pct + '%';
+      document.getElementById('progress-label').textContent = p.phase || '处理中';
+      document.getElementById('progress-count').textContent = `${p.current} / ${p.total}  (${pct}%)`;
+    }
+
+    if (json.done) {
+      clearInterval(pollTimer);
+      _lastLogLen = 0;
+      document.getElementById('btn-update').disabled = false;
+      if (json.error) {
+        document.getElementById('progress-bar-fill').style.background = '#ef4444';
+        document.getElementById('progress-label').textContent = '更新失败';
+        document.getElementById('status-msg').textContent = '错误: ' + json.error;
+      } else {
+        document.getElementById('progress-bar-fill').style.width = '100%';
+        document.getElementById('progress-label').textContent = '更新完成';
+        document.getElementById('status-msg').textContent = '数据已是最新';
+      }
+    }
+  } catch(e) {}
+}
+</script>
+</body>
+</html>

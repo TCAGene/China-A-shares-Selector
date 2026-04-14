@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K线图</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f1117; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+header { padding: 16px 24px; border-bottom: 1px solid #1e2130; display: flex; align-items: center; gap: 16px; }
+#back-btn { padding: 6px 16px; background: #1e2130; border: 1px solid #2a2d3e; border-radius: 5px; color: #8b9ab0; cursor: pointer; font-size: 13px; }
+#back-btn:hover { background: #2a2d3e; }
+#title { font-size: 18px; font-weight: 600; color: #fff; }
+#subtitle { font-size: 13px; color: #8b9ab0; }
+#msg { padding: 48px; text-align: center; color: #4a5568; }
+#chart-container { flex: 1; display: flex; flex-direction: column; padding: 8px; }
+#chart { flex: 1; min-height: 0; }
+</style>
+</head>
+<body>
+<header>
+  <button id="back-btn" onclick="history.back()">← 返回</button>
+  <div>
+    <div id="title">加载中…</div>
+    <div id="subtitle"></div>
+  </div>
+</header>
+<div id="msg"></div>
+<div id="chart-container" style="display:none">
+  <div id="chart"></div>
+</div>
+<script>
+const params = new URLSearchParams(location.search);
+const code = params.get('code');
+const nameHint = params.get('name') || code;
+
+if (!code) {
+  document.getElementById('msg').textContent = '缺少股票代码参数';
+} else {
+  document.getElementById('title').textContent = nameHint + '  ' + code;
+  loadKline(code);
+}
+
+async function loadKline(code) {
+  const msg = document.getElementById('msg');
+  msg.textContent = '数据加载中…';
+  try {
+    const res = await fetch(`/api/kline?code=${code}`);
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error);
+    document.getElementById('title').textContent = json.name + '  ' + json.code;
+    document.getElementById('subtitle').textContent = `共 ${json.data.length} 个交易日`;
+    msg.style.display = 'none';
+    document.getElementById('chart-container').style.display = 'flex';
+    renderChart(json.data);
+  } catch(e) {
+    msg.textContent = '加载失败: ' + e.message;
+  }
+}
+
+function renderChart(data) {
+  const chart = echarts.init(document.getElementById('chart'), 'dark');
+
+  // 建立 date → 行数据 的映射，供 tooltip 使用
+  const dateMap = {};
+  data.forEach(d => { dateMap[d.date] = d; });
+
+  const dates = data.map(d => d.date);
+  // ECharts candlestick: [open, close, low, high]
+  const candles = data.map(d => [d.open, d.close, d.low, d.high]);
+  const volumes = data.map(d => ({
+    value: d.volume || 0,
+    itemStyle: { color: d.close >= d.open ? '#ef4444' : '#22c55e' }
+  }));
+
+  const option = {
+    backgroundColor: '#0f1117',
+    animation: false,
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      backgroundColor: '#1a1d27',
+      borderColor: '#2a2d3e',
+      textStyle: { color: '#e0e0e0', fontSize: 12 },
+      formatter: params => {
+        const c = params.find(p => p.seriesName === 'K线');
+        if (!c) return '';
+        // 通过 date 查原始数据，避免依赖 ECharts 内部数组顺序
+        const d = dateMap[c.axisValue];
+        if (!d) return c.axisValue;
+        const o = d.open, cl = d.close, h = d.high, l = d.low;
+        const chgPct = o > 0 ? ((cl - o) / o * 100).toFixed(2) : '—';
+        const color = cl >= o ? '#ef4444' : '#22c55e';
+        return `<b>${d.date}</b><br/>
+          开: ${o.toFixed(2)}&nbsp;&nbsp;收: <span style="color:${color}">${cl.toFixed(2)}</span><br/>
+          高: ${h.toFixed(2)}&nbsp;&nbsp;低: ${l.toFixed(2)}<br/>
+          涨幅: <span style="color:${color}">${chgPct}%</span>`;
+      }
+    },
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1], start: Math.max(0, 100 - 1000 / data.length * 100), end: 100 },
+      { type: 'slider', xAxisIndex: [0, 1], bottom: 4, height: 20,
+        borderColor: '#2a2d3e', fillerColor: 'rgba(37,99,235,0.15)',
+        handleStyle: { color: '#2563eb' }, textStyle: { color: '#8b9ab0' } }
+    ],
+    grid: [
+      { left: 60, right: 16, top: 16, bottom: 80, height: '65%' },
+      { left: 60, right: 16, bottom: 80, height: '18%', top: '82%' }
+    ],
+    xAxis: [
+      { type: 'category', data: dates, gridIndex: 0, axisLine: { lineStyle: { color: '#2a2d3e' } },
+        axisLabel: { color: '#8b9ab0', fontSize: 11 }, splitLine: { show: false } },
+      { type: 'category', data: dates, gridIndex: 1, axisLabel: { show: false },
+        axisLine: { lineStyle: { color: '#2a2d3e' } }, splitLine: { show: false } }
+    ],
+    yAxis: [
+      { scale: true, gridIndex: 0, splitLine: { lineStyle: { color: '#1e2130' } },
+        axisLabel: { color: '#8b9ab0', fontSize: 11 }, axisLine: { show: false } },
+      { scale: true, gridIndex: 1, splitNumber: 2, splitLine: { lineStyle: { color: '#1e2130' } },
+        axisLabel: { color: '#8b9ab0', fontSize: 10 }, axisLine: { show: false } }
+    ],
+    series: [
+      {
+        name: 'K线', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0, data: candles,
+        itemStyle: {
+          color: '#ef4444', color0: '#22c55e',
+          borderColor: '#ef4444', borderColor0: '#22c55e'
+        }
+      },
+      {
+        name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1,
+        data: volumes, barMaxWidth: 6
+      }
+    ]
+  };
+
+  chart.setOption(option);
+  window.addEventListener('resize', () => chart.resize());
+}
+</script>
+</body>
+</html>
